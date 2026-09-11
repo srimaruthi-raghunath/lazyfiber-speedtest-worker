@@ -1,5 +1,188 @@
-const handleRequest = require('./src');
+const DEFAULT_NUM_BYTES = 0;
+const MAX_BYTES = 1e8;
 
-addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request));
-});
+/**
+ * Parse query string exactly for the speedtest endpoint.
+ */
+const getQs = url => {
+	const sp = url.split('?');
+
+	if (sp.length < 2) {
+		return {};
+	}
+
+	const qs = sp[1];
+
+	return Object.assign(
+		{},
+		...qs.split('&').map(s => {
+			const sp = s.split('=');
+
+			if (sp.length !== 2) {
+				return {};
+			}
+
+			return {
+				[sp[0]]: sp[1]
+			};
+		})
+	);
+};
+
+/**
+ * Generate the response body.
+ *
+ * This is the same behavior as the original
+ * Cloudflare worker-speedtest-template.
+ */
+const genContent = (numBytes = 0) =>
+	'0'.repeat(Math.max(0, numBytes));
+
+
+/**
+ * GET /down
+ *
+ * Request binary content of a certain size.
+ *
+ * Example:
+ * /down?bytes=10000
+ */
+async function downHandler(request) {
+	const reqTime = new Date();
+
+	const qs = getQs(request.url);
+
+	const numBytes = Object.prototype.hasOwnProperty.call(qs, 'bytes')
+		? Math.min(MAX_BYTES, Math.abs(+qs.bytes))
+		: DEFAULT_NUM_BYTES;
+
+	const res = new Response(genContent(numBytes));
+
+	res.headers.set(
+		'access-control-allow-origin',
+		'*'
+	);
+
+	res.headers.set(
+		'timing-allow-origin',
+		'*'
+	);
+
+	res.headers.set(
+		'cache-control',
+		'no-store'
+	);
+
+	res.headers.set(
+		'content-type',
+		'application/octet-stream'
+	);
+
+	if (request.cf && request.cf.colo) {
+		res.headers.set(
+			'cf-meta-colo',
+			request.cf.colo
+		);
+	}
+
+	res.headers.set(
+		'cf-meta-request-time',
+		+reqTime
+	);
+
+	res.headers.set(
+		'access-control-expose-headers',
+		'cf-meta-colo, cf-meta-request-time'
+	);
+
+	return res;
+}
+
+
+/**
+ * POST /up
+ *
+ * Receive content posted to the server.
+ *
+ * The original worker discards the content and returns
+ * a response once the request has been received.
+ */
+async function upHandler(request) {
+	const reqTime = new Date();
+
+	const res = new Response('ok');
+
+	res.headers.set(
+		'access-control-allow-origin',
+		'*'
+	);
+
+	res.headers.set(
+		'timing-allow-origin',
+		'*'
+	);
+
+	if (request.cf && request.cf.colo) {
+		res.headers.set(
+			'cf-meta-colo',
+			request.cf.colo
+		);
+	}
+
+	res.headers.set(
+		'cf-meta-request-time',
+		+reqTime
+	);
+
+	res.headers.set(
+		'access-control-expose-headers',
+		'cf-meta-colo, cf-meta-request-time'
+	);
+
+	return res;
+}
+
+
+/**
+ * Main Worker
+ *
+ * Modern ES Modules format for Cloudflare Workers.
+ */
+export default {
+	async fetch(request, env, ctx) {
+		const url = new URL(request.url);
+
+		/*
+		 * Original worker:
+		 *
+		 * GET  .*/down
+		 * POST .*/up
+		 *
+		 * The router matched the pathname.
+		 */
+
+		if (
+			request.method.toLowerCase() === 'get' &&
+			/.*/.test(url.pathname) &&
+			url.pathname.endsWith('/down')
+		) {
+			return downHandler(request);
+		}
+
+		if (
+			request.method.toLowerCase() === 'post' &&
+			/.*/.test(url.pathname) &&
+			url.pathname.endsWith('/up')
+		) {
+			return upHandler(request);
+		}
+
+		return new Response('resource not found', {
+			status: 404,
+			statusText: 'not found',
+			headers: {
+				'content-type': 'text/plain'
+			}
+		});
+	}
+};

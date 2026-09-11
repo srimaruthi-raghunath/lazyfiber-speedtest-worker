@@ -1,3 +1,9 @@
-name = "speedtest-worker"
-main = "index.js"
-compatibility_date = "2026-08-24"
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+
+  "name": "cloudflare-worker-speedtest",
+
+  "main": "index.js",
+
+  "compatibility_date": "2026-09-11"
+}
