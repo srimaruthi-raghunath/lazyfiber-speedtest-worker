@@ -1,10 +1,27 @@
+/**
+ * Cloudflare Worker — Speed Test
+ *
+ * Endpoints:
+ *
+ *   GET  /down?bytes=N
+ *   POST /up
+ *
+ * Example:
+ *
+ *   /down?bytes=1000000
+ *
+ * This is a modern ES Modules version of the
+ * Cloudflare worker-speedtest-template.
+ */
+
 const DEFAULT_NUM_BYTES = 0;
-const MAX_BYTES = 1e8;
+const MAX_BYTES = 100 * 1000 * 1000;
+
 
 /**
- * Parse query string exactly for the speedtest endpoint.
+ * Parse query string.
  */
-const getQs = url => {
+function getQs(url) {
 	const sp = url.split('?');
 
 	if (sp.length < 2) {
@@ -16,36 +33,35 @@ const getQs = url => {
 	return Object.assign(
 		{},
 		...qs.split('&').map(s => {
-			const sp = s.split('=');
+			const parts = s.split('=');
 
-			if (sp.length !== 2) {
+			if (parts.length !== 2) {
 				return {};
 			}
 
 			return {
-				[sp[0]]: sp[1]
+				[parts[0]]: parts[1]
 			};
 		})
 	);
-};
+}
+
 
 /**
- * Generate the response body.
+ * Generate response content.
  *
- * This is the same behavior as the original
- * Cloudflare worker-speedtest-template.
+ * The original speedtest template uses a string
+ * containing zeroes as the response body.
  */
-const genContent = (numBytes = 0) =>
-	'0'.repeat(Math.max(0, numBytes));
+function genContent(numBytes = 0) {
+	return '0'.repeat(Math.max(0, numBytes));
+}
 
 
 /**
- * GET /down
+ * Download handler.
  *
- * Request binary content of a certain size.
- *
- * Example:
- * /down?bytes=10000
+ * GET /down?bytes=N
  */
 async function downHandler(request) {
 	const reqTime = new Date();
@@ -53,136 +69,177 @@ async function downHandler(request) {
 	const qs = getQs(request.url);
 
 	const numBytes = Object.prototype.hasOwnProperty.call(qs, 'bytes')
-		? Math.min(MAX_BYTES, Math.abs(+qs.bytes))
+		? Math.min(
+			MAX_BYTES,
+			Math.abs(Number(qs.bytes))
+		)
 		: DEFAULT_NUM_BYTES;
 
-	const res = new Response(genContent(numBytes));
+	const response = new Response(
+		genContent(numBytes)
+	);
 
-	res.headers.set(
+	response.headers.set(
 		'access-control-allow-origin',
 		'*'
 	);
 
-	res.headers.set(
+	response.headers.set(
 		'timing-allow-origin',
 		'*'
 	);
 
-	res.headers.set(
+	response.headers.set(
 		'cache-control',
 		'no-store'
 	);
 
-	res.headers.set(
+	response.headers.set(
 		'content-type',
 		'application/octet-stream'
 	);
 
+	/*
+	 * Cloudflare datacenter/colo.
+	 */
 	if (request.cf && request.cf.colo) {
-		res.headers.set(
+		response.headers.set(
 			'cf-meta-colo',
 			request.cf.colo
 		);
 	}
 
-	res.headers.set(
+	/*
+	 * Time when the Worker received the request.
+	 */
+	response.headers.set(
 		'cf-meta-request-time',
-		+reqTime
+		String(+reqTime)
 	);
 
-	res.headers.set(
+	/*
+	 * Allow the browser to read the Cloudflare
+	 * metadata headers.
+	 */
+	response.headers.set(
 		'access-control-expose-headers',
 		'cf-meta-colo, cf-meta-request-time'
 	);
 
-	return res;
+	return response;
 }
 
 
 /**
+ * Upload handler.
+ *
  * POST /up
  *
- * Receive content posted to the server.
- *
- * The original worker discards the content and returns
- * a response once the request has been received.
+ * The request body is received and discarded.
  */
 async function upHandler(request) {
 	const reqTime = new Date();
 
-	const res = new Response('ok');
+	/*
+	 * Consume the request body.
+	 *
+	 * This makes the Worker wait until the upload
+	 * body has been received.
+	 */
+	if (request.body) {
+		const reader = request.body.getReader();
 
-	res.headers.set(
+		while (true) {
+			const { done } = await reader.read();
+
+			if (done) {
+				break;
+			}
+		}
+	}
+
+	const response = new Response('ok');
+
+	response.headers.set(
 		'access-control-allow-origin',
 		'*'
 	);
 
-	res.headers.set(
+	response.headers.set(
 		'timing-allow-origin',
 		'*'
 	);
 
+	/*
+	 * Cloudflare datacenter/colo.
+	 */
 	if (request.cf && request.cf.colo) {
-		res.headers.set(
+		response.headers.set(
 			'cf-meta-colo',
 			request.cf.colo
 		);
 	}
 
-	res.headers.set(
+	/*
+	 * Time when the Worker received the request.
+	 */
+	response.headers.set(
 		'cf-meta-request-time',
-		+reqTime
+		String(+reqTime)
 	);
 
-	res.headers.set(
+	/*
+	 * Allow the browser to read the Cloudflare
+	 * metadata headers.
+	 */
+	response.headers.set(
 		'access-control-expose-headers',
 		'cf-meta-colo, cf-meta-request-time'
 	);
 
-	return res;
+	return response;
 }
 
 
 /**
- * Main Worker
- *
- * Modern ES Modules format for Cloudflare Workers.
+ * Main Cloudflare Worker.
  */
 export default {
 	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
 
 		/*
-		 * Original worker:
-		 *
-		 * GET  .*/down
-		 * POST .*/up
-		 *
-		 * The router matched the pathname.
+		 * Download endpoint.
 		 */
-
 		if (
-			request.method.toLowerCase() === 'get' &&
-			/.*/.test(url.pathname) &&
+			request.method === 'GET' &&
 			url.pathname.endsWith('/down')
 		) {
 			return downHandler(request);
 		}
 
+		/*
+		 * Upload endpoint.
+		 */
 		if (
-			request.method.toLowerCase() === 'post' &&
-			/.*/.test(url.pathname) &&
+			request.method === 'POST' &&
 			url.pathname.endsWith('/up')
 		) {
 			return upHandler(request);
 		}
 
-		return new Response('resource not found', {
-			status: 404,
-			statusText: 'not found',
-			headers: {
-				'content-type': 'text/plain'
+		/*
+		 * Everything else.
+		 */
+		return new Response(
+			'resource not found',
+			{
+				status: 404,
+				statusText: 'not found',
+				headers: {
+					'content-type': 'text/plain'
+				}
 			}
-		});
+		);
 	}
 };
